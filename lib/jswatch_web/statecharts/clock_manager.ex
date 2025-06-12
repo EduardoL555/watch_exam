@@ -1,7 +1,6 @@
 defmodule JswatchWeb.ClockManager do
   use GenServer
 
-  # ——————————————————————————————————————————————
   # Formatea la fecha con blink en la parte seleccionada
   def format_date(date, show, selection) do
     day   = if date.day < 10, do: "0#{date.day}", else: "#{date.day}"
@@ -19,7 +18,6 @@ defmodule JswatchWeb.ClockManager do
     "#{day}/#{month}/#{year}"
   end
 
-  # ——————————————————————————————————————————————
   # Inicialización del GenServer y estado inicial
   def init(ui) do
     :gproc.reg({:p, :l, :ui_event})
@@ -50,7 +48,6 @@ defmodule JswatchWeb.ClockManager do
     {:ok, state}
   end
 
-  # ——————————————————————————————————————————————
   # Cronómetro: solo avanza cuando NO estamos en edición (st2 == :Idle)
   def handle_info(:working_working,
       %{ui_pid: ui, time: time, alarm: alarm, st1: :Working, st2: :Idle} = state) do
@@ -65,10 +62,8 @@ defmodule JswatchWeb.ClockManager do
     {:noreply, %{state | time: new_time}}
   end
 
-  # ——————————————————————————————————————————————
   # Paso 1: al presionar bottom-right en Idle, entrar a modo Editing
   def handle_info({:ui_event, :'bottom-right-pressed'}, %{st2: :Idle} = state) do
-    # 1) Detener working si hace falta
     state1 =
       if state.st1 == :Working do
         %{state | st1: :Stopped}
@@ -76,7 +71,6 @@ defmodule JswatchWeb.ClockManager do
         state
       end
 
-    # 2) Configurar modo Editing (selección de día + blink)
     new_state = %{
       state1
       | st2:       :Editing,
@@ -85,10 +79,7 @@ defmodule JswatchWeb.ClockManager do
         count:     0
     }
 
-    # 3) Mostrar fecha con día parpadeando
     GenServer.cast(new_state.ui_pid, {:set_date_display, format_date(new_state.date, true, :Day)})
-
-    # 4) Iniciar blink cada 250 ms
     Process.send_after(self(), :edit_blink, 250)
 
     {:noreply, new_state}
@@ -99,24 +90,47 @@ defmodule JswatchWeb.ClockManager do
     {:noreply, state}
   end
 
-  # ——————————————————————————————————————————————
-  # Paso 2: manejar el parpadeo en modo Editing
+  # —————————————————————————————
+  # Paso 2 (este bloque): navegar selección en modo Editing
+  def handle_info({:ui_event, :'bottom-left-pressed'},
+      %{st2: :Editing, date: date, selection: sel, ui_pid: ui} = state) do
+    # Avanzar selección: Day -> Month -> Year -> Day
+    next_sel = case sel do
+      :Day   -> :Month
+      :Month -> :Year
+      :Year  -> :Day
+    end
+
+    # Reiniciar blink
+    new_state = %{
+      state
+      | selection: next_sel,
+        show:      true,
+        count:     0
+    }
+
+    # Mostrar fecha con nuevo campo parpadeando
+    GenServer.cast(ui, {:set_date_display, format_date(date, true, next_sel)})
+
+    # Reinciar timer de blink
+    Process.send_after(self(), :edit_blink, 250)
+
+    {:noreply, new_state}
+  end
+
+  # Manejo del blink en modo Editing
   def handle_info(:edit_blink,
       %{ui_pid: ui, date: date, selection: sel, show: show, count: count, st2: :Editing} = state) do
     new_show  = !show
     new_count = count + 1
     new_state = %{state | show: new_show, count: new_count}
 
-    # Actualizar UI
     GenServer.cast(ui, {:set_date_display, format_date(date, new_show, sel)})
-
-    # Reagendar siguiente blink
     Process.send_after(self(), :edit_blink, 250)
 
     {:noreply, new_state}
   end
 
-  # ——————————————————————————————————————————————
   # Otros eventos ignorados
   def handle_info(_event, state), do: {:noreply, state}
 end
